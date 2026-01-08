@@ -1,0 +1,123 @@
+---
+title: "SocioEconomic Factors that Affect the Quality of Life"
+output: html_document
+date: "2025-10-16"
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE, message = FALSE, warning = FALSE,
+  fig.align = "center", out.width = "95%", dpi = 150,
+  fig.width = 9, fig.height = 5
+)
+library(tidyverse)
+library(NHANES)
+data("NHANESraw")
+
+
+theme_set(
+  theme_minimal(base_size = 13) +
+    theme(
+      plot.title = element_text(face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(margin = margin(b = 8)),
+      plot.caption = element_text(size = 9, color = "gray40"),
+      axis.title = element_text(face = "bold"),
+      panel.grid.minor = element_blank(),
+      legend.position = "bottom",
+      legend.title = element_text(face = "bold"),
+      plot.margin = margin(12,12,12,12)
+    )
+)
+
+nh <- NHANESraw %>%
+  mutate(
+    AgeGroup = cut(Age, c(0,18,30,45,60,80,Inf),
+                   labels = c("≤18","19–30","31–45","46–60","61–80","80+"),
+                   right = FALSE),
+    Income = HHIncomeMid,
+    PovertyRatio = as.numeric(Poverty),
+    SleepBand = case_when(
+      SleepHrsNight <= 6 ~ "≤6",
+      SleepHrsNight >= 9 ~ "≥9",
+      SleepHrsNight > 6 & SleepHrsNight < 9 ~ "7–8",
+      TRUE ~ NA_character_
+    ) |> factor(levels = c("≤6","7–8","≥9"))
+  )
+
+```
+Introduction: For this project, we work directly with the NHANESraw dataset, using the original survey data rather than relying on any pre-cleaned version. We only apply minor data preparation when needed to support our visual comparisons and explore our theme of socioeconomic factors. Missing values are handled within each analysis rather than removed globally, so the integrity and variability of the raw data are preserved throughout the report.
+```{r d1_sleep_plot}
+nh %>%
+  filter(!is.na(SleepHrsNight), !is.na(Education), !is.na(AgeGroup), !is.na(Gender)) %>%
+  ggplot(aes(x = Education, y = SleepHrsNight, fill = Gender)) +
+  geom_boxplot(outlier.alpha = 0.15, width = 0.7,
+               position = position_dodge(width = 0.75)) +
+  stat_summary(aes(group = interaction(Education, Gender)),
+               fun = mean,
+               fun.min = ~ mean(.) - 1.96*sd(.)/sqrt(length(.)),
+               fun.max = ~ mean(.) + 1.96*sd(.)/sqrt(length(.)),
+               geom = "pointrange",
+               position = position_dodge(width = 0.75),
+               color = "black", size = 0.25) +
+  facet_wrap(~ AgeGroup) +
+  labs(title = "Sleep Hours by Education, faceted by Age Group",
+       x = "Education level", y = "Sleep hours per night", fill = "Gender") + theme(axis.text.x = element_text(angle = 30, hjust = 1))
+
+```
+Higher education levels generally align with slightly longer reported sleep duration, particularly in middle-aged groups, though the differences are modest rather than drastic. While the median values increase in some education categories, the wide interquartile ranges indicate substantial variability within each group. Gender differences are present but subtle, suggesting that sleep patterns are shaped by more than just demographic factors. Notably, in younger and older age brackets, the trend appears less defined, which may reflect different lifestyle pressures across the life span. Overall, the plot suggests that education may influence sleep habits, but not strongly enough to overcome individual and age-based variation.
+```{r d2_marital_plot}
+nh %>%
+  select(MaritalStatus, Gender, SleepHrsNight, Pulse) %>%
+  pivot_longer(c(SleepHrsNight, Pulse), names_to = "Measure", values_to = "Value") %>%
+  filter(!is.na(Value), !is.na(MaritalStatus), !is.na(Gender)) %>%
+  ggplot(aes(MaritalStatus, Value, fill = MaritalStatus)) +
+  geom_violin(trim = TRUE, alpha = 0.65) +
+  geom_jitter(width = 0.15, alpha = 0.15, size = 0.7) +
+  stat_summary(fun = median, geom = "point", shape = 23, size = 1.8, fill = "white") +
+  facet_grid(Measure ~ Gender, scales = "free_y") +
+  labs(title = "Sleep and Pulse by Marital Status and Gender",
+       x = "Marital status", y = "Value (hours or bpm)", fill = "Marital status") + theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+Married and partnered individuals tend to show slightly lower pulse rates and more stable sleep durations compared to those who are divorced, separated, or widowed. The wider spread in the divorced and widowed groups suggests greater variability, which may reflect stress, lifestyle instability, or other emotional factors. Gender differences are noticeable: men show higher pulse variability, while women display more variability in sleep. Still, no single marital category demonstrates a uniform outcome, indicating that personal circumstances play a major role. Taken together, the patterns imply that marital stability may offer some protective benefits, but it does not guarantee consistent health behaviors.
+```{r d3_prepare_sleeptrouble, include=FALSE}
+dep_df <- nh %>%
+  filter(!is.na(Income), !is.na(PovertyRatio), !is.na(SleepBand), !is.na(SleepTrouble)) %>%
+  mutate(
+    IncomeQuart = cut(Income,
+                      breaks = quantile(Income, probs = seq(0,1,0.25), na.rm = TRUE),
+                      include.lowest = TRUE, dig.lab = 6),
+    PovertyBand = cut(PovertyRatio, breaks = c(-Inf, 1, 2, 3, Inf),
+                      labels = c("<1x (Below)", "1–2x", "2–3x", ">3x")),
+    trouble = SleepTrouble == "Yes"
+  ) %>%
+  group_by(PovertyBand, IncomeQuart, SleepBand) %>%
+  summarise(
+    n    = sum(!is.na(trouble)),
+    p    = mean(trouble, na.rm = TRUE),
+    se   = sqrt(p*(1-p)/n),
+    lo   = pmax(0, p - 1.96*se),
+    hi   = pmin(1, p + 1.96*se),
+    .groups = "drop"
+  ) %>%
+  filter(n >= 30)
+```
+```{r d3_sleeptrouble_plot}
+ggplot(dep_df, aes(IncomeQuart, p, fill = SleepBand)) +
+  geom_col(position = position_dodge(width = 0.85)) +
+  geom_errorbar(aes(ymin = lo, ymax = hi),
+                width = 0.18, position = position_dodge(width = 0.85)) +
+  facet_wrap(~ PovertyBand) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1),
+                     limits = c(0, 0.40), expand = expansion(mult = c(0, 0.02))) +
+  geom_text(aes(label = scales::percent(p, accuracy = 0.1)),
+            position = position_dodge(width = 0.85),
+            vjust = -0.3, size = 3, check_overlap = TRUE) +
+  labs(
+    title = "Sleep Trouble by Income, Poverty, and Sleep Duration",
+    subtitle = "Grouped by sleep bands; faceted by poverty ratio bands; error bars are 95% CIs",
+    x = "Household income (quartiles)", y = "Prevalence reporting sleep trouble", fill = "Sleep duration"
+  ) +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+Self-rated poor or fair health is noticeably more common among individuals in lower income quartiles and higher poverty bands. Across nearly all groups, those sleeping ≤6 hours per night report worse health more frequently than those with 7–8 hours, suggesting a potential link between sleep deprivation and perceived well-being. While the differences are not extreme in every cell, the general gradient is consistent — better financial standing and adequate sleep tend to align with better self-reported health. The presence of overlapping confidence intervals in some categories also serves as a reminder that health is influenced by multiple factors beyond income and sleep alone. Still, the overall trend supports the idea that socioeconomic pressure may contribute to poorer health perceptions, especially when combined with insufficient rest.
+ 
+Conclusion: Overall, our report on the NHANESraw dataset showed that socioeconomic factors such as education, marital status, income, and sleep are linked to measurable differences in health outcomes. These differences weren’t extreme, but they appeared consistently, individuals with higher education or more stable living conditions often showed slightly better sleep patterns and lower levels of depressive symptoms. At the same time, the overlap between the groups helped us conclude that no single factor defines health. Instead, these results highlight that social and economic context as a whole truly plays a meaningful role in shaping health related patterns, even when the effects are subtle.
